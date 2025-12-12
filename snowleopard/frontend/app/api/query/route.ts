@@ -6,11 +6,17 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { item, location } = body;
+    const { item, query, location } = body;
 
-    if (!item || item === 'No matching items found') {
+    // We accept `query` always for voice/text input, and keep `item` for backward compatibility.
+    const effectiveItem =
+      typeof query === 'string' && query.trim()
+        ? query.trim()
+        : item;
+
+    if (!effectiveItem || effectiveItem === 'No matching items found') {
       return NextResponse.json(
-        { error: 'No valid item provided' },
+        { success: false, error: 'No valid query/item provided', answer: 'No valid query/item provided' },
         { status: 400 }
       );
     }
@@ -41,10 +47,10 @@ export async function POST(request: NextRequest) {
 
     if (location && location.name) {
       // Use the matched donation center address
-      question = `Check the table for the stock of ${item} at ${location.name}. How many are available?`;
+      question = `Check the table for the stock of ${effectiveItem} at ${location.name}. How many are available?`;
       console.log('Query with matched location:', question);
     } else {
-      question = `Check the stock of ${item}. How many are in stock?`;
+      question = `Check the stock of ${effectiveItem}. How many are in stock?`;
     }
 
     console.log('Sending query to SnowLeopard:', question);
@@ -91,9 +97,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      item: item,
+      item: effectiveItem,
       question: question,
       stockInfo: formattedStockInfo.trim(),
+      // Voice UI expects `answer`; use the same formatted response.
+      answer: formattedStockInfo.trim(),
       rawData: finalChunk,
       timestamp: new Date().toISOString(),
     });
@@ -115,7 +123,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
+        success: false,
         error: 'Failed to query stock information',
+        answer: 'Failed to query stock information',
         details: error instanceof Error ? error.message : 'Unknown error',
         fullError: JSON.stringify(error, null, 2)
       },
