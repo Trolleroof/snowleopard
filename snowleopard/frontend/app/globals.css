@@ -23,6 +23,37 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: 'Poppins', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+}
+
+/* iOS PWA Support */
+@supports (padding: env(safe-area-inset-top)) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Prevent pull-to-refresh on iOS */
+html, body {
+  overscroll-behavior-y: contain;
+  height: 100%;
+  width: 100%;
+  position: fixed;
+  overflow: hidden;
+}
+
+#__next {
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 * {
@@ -33,6 +64,8 @@ body {
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200 shadow-sm hover:shadow-md focus:outline-none focus:ring-2 focus:ring-lime-400/50 active:scale-[0.98];
+    /* Minimum touch target size for mobile (44x44px recommended by Apple) */
+    min-height: 44px;
   }
   .btn-sm { @apply px-3 py-2 text-sm; }
   .btn-md { @apply px-5 py-3 text-base; }

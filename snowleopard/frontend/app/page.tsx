@@ -151,11 +151,9 @@ export default function Home() {
           <div className="max-w-6xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-lime-400 to-emerald-400" />
-              <span className="text-white/90 font-semibold">SnowLeopard</span>
+              <span className="text-white/90 font-semibold">Olly</span>
             </div>
-            <nav className="hidden sm:flex items-center gap-2">
-              <Link href="/camera" className="btn btn-sm btn-outline">Camera</Link>
-              <Link href="/voice" className="btn btn-sm btn-outline">Voice</Link>
+            <nav className="flex items-center gap-2">
               <Link href="/combined" className="btn btn-sm btn-primary">Try Demo</Link>
             </nav>
           </div>
