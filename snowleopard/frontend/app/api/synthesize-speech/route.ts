@@ -26,24 +26,34 @@ export async function POST(request: NextRequest) {
     });
 
     // Get voice ID from environment or use default
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB'; // Default: Adam voice
+    // Popular ElevenLabs voice IDs:
+    // - 'pNInz6obpgDQGcFmaJgB' (Adam - default, male, American)
+
+    const voiceId = 'L1aJrPa7pLJEyYlh3Ilq'
 
     // Generate speech from text
     const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
       text: text.trim(),
-      model_id: 'eleven_monolingual_v1',
-      voice_settings: {
+      modelId: 'eleven_monolingual_v2',
+      voiceSettings: {
         stability: 0.5,
-        similarity_boost: 0.75,
-        style: 0.0,
-        use_speaker_boost: true,
+        similarityBoost: 0.75,
+        style: 0.2,
+        useSpeakerBoost: true,
       },
     });
 
     // Convert stream to buffer
     const chunks: Uint8Array[] = [];
-    for await (const chunk of audioStream) {
-      chunks.push(chunk);
+    const reader = audioStream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
     }
 
     const audioBuffer = Buffer.concat(chunks);
