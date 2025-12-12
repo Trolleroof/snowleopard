@@ -160,7 +160,7 @@ export default function Home() {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               <Link
-                href="/camera"
+                href="/combined"
                 className="inline-flex items-center justify-center px-8 py-4 text-lg font-medium text-white bg-white/10 backdrop-blur-sm border border-white/20 rounded-full hover:bg-white/20 transition-all shadow-lg hover:shadow-xl"
               >
                 Get Started
@@ -197,7 +197,7 @@ export default function Home() {
             </div>
 
             <div className="grid md:grid-cols-3 gap-6 lg:gap-8 mt-16">
-              <div className="p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all">
+              <Link href="/camera" className="p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all">
                 <div className="text-4xl mb-4">📷</div>
                 <h3 className="text-xl font-medium text-white mb-3">
                   Instant item recognition
@@ -205,9 +205,9 @@ export default function Home() {
                 <p className="text-gray-400 leading-relaxed">
                   Simply scan donated items with your camera. AI instantly identifies and categorizes them into your inventory.
                 </p>
-              </div>
+              </Link>
 
-              <div className="p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all">
+              <Link href="/voice" className="p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all">
                 <div className="text-4xl mb-4">💬</div>
                 <h3 className="text-xl font-medium text-white mb-3">
                   Ask about availability
@@ -215,17 +215,17 @@ export default function Home() {
                 <p className="text-gray-400 leading-relaxed">
                   "Do we have winter coats?" "How many diapers are left?" Get instant answers about what's in stock.
                 </p>
-              </div>
+              </Link>
 
-              <div className="p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 transition-all">
-                <div className="text-4xl mb-4">📊</div>
+              <Link href="/combined" className="p-8 rounded-2xl bg-gradient-to-br from-lime-500/10 to-emerald-500/10 border-2 border-lime-500/30 hover:border-lime-500/50 transition-all">
+                <div className="text-4xl mb-4">🎯</div>
                 <h3 className="text-xl font-medium text-white mb-3">
-                  Track what matters
+                  Camera + Voice Assistant
                 </h3>
                 <p className="text-gray-400 leading-relaxed">
-                  Monitor donation trends, identify needs, and ensure critical items are always stocked.
+                  Say "Ollie" and ask about items you're seeing. Combines camera and voice for hands-free queries.
                 </p>
-              </div>
+              </Link>
             </div>
           </div>
         </section>
@@ -277,7 +277,7 @@ export default function Home() {
               Help more people. Waste less. Track smarter.
             </h2>
             <Link
-              href="/camera"
+              href="/combined"
               className="inline-flex items-center justify-center px-8 py-4 text-lg font-medium text-slate-900 bg-gradient-to-r from-green-400 via-lime-400 to-yellow-300 rounded-full hover:from-green-500 hover:via-lime-500 hover:to-yellow-400 transition-all shadow-lg hover:shadow-xl"
             >
               Try the Demo →
