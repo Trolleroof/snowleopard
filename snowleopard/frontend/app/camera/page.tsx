@@ -10,6 +10,8 @@ export default function CameraPage() {
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<string>('');
+  const [stockInfo, setStockInfo] = useState<string>('');
+  const [identifiedItem, setIdentifiedItem] = useState<string>('');
 
   useEffect(() => {
     startCamera();
@@ -58,6 +60,8 @@ export default function CameraPage() {
     setIsProcessing(true);
     setError('');
     setAnalysisResult('');
+    setStockInfo('');
+    setIdentifiedItem('');
 
     try {
       // Set canvas dimensions to match video
@@ -100,7 +104,39 @@ export default function CameraPage() {
         throw new Error(data.error || 'Failed to process image');
       }
 
-      setAnalysisResult(data.analysis);
+      const itemName = data.analysis;
+      setAnalysisResult(itemName);
+      setIdentifiedItem(itemName);
+
+      // Query stock information if item was identified
+      if (itemName && itemName !== 'No matching items found') {
+        console.log('Querying stock for item:', itemName);
+
+        const queryResponse = await fetch('/api/query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ item: itemName }),
+        });
+
+        const queryData = await queryResponse.json();
+        console.log('Query response:', queryData);
+
+        if (queryResponse.ok) {
+          if (queryData.stockInfo) {
+            setStockInfo(queryData.stockInfo);
+            console.log('Stock info set:', queryData.stockInfo);
+          } else {
+            setStockInfo('No stock information available');
+          }
+        } else {
+          console.error('Stock query failed:', queryData.error);
+          setStockInfo(`Error: ${queryData.error || 'Failed to retrieve stock information'}`);
+        }
+      } else {
+        console.log('No valid item to query:', itemName);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process snapshot');
       console.error('Error taking snapshot:', err);
@@ -157,13 +193,30 @@ export default function CameraPage() {
           </div>
 
           {analysisResult && (
-            <div className="mt-6 bg-gray-700 rounded-lg p-6">
-              <h2 className="text-xl font-semibold text-white mb-3">
-                Gemini Analysis
-              </h2>
-              <p className="text-gray-200 whitespace-pre-wrap leading-relaxed">
-                {analysisResult}
-              </p>
+            <div className="mt-6 space-y-4">
+              <div className="bg-gray-700 rounded-lg p-6">
+                <h2 className="text-xl font-semibold text-white mb-3">
+                  Identified Item
+                </h2>
+                <p className="text-gray-200 text-lg font-medium">
+                  {analysisResult}
+                </p>
+              </div>
+
+              <div className="bg-blue-900 rounded-lg p-6">
+                <h2 className="text-xl font-semibold text-white mb-3">
+                  Stock Information
+                </h2>
+                {isProcessing ? (
+                  <p className="text-gray-300 italic">Loading stock information...</p>
+                ) : stockInfo ? (
+                  <p className="text-gray-100 whitespace-pre-wrap leading-relaxed">
+                    {stockInfo}
+                  </p>
+                ) : (
+                  <p className="text-gray-300 italic">Querying stock data...</p>
+                )}
+              </div>
             </div>
           )}
         </div>
