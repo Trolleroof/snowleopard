@@ -66,8 +66,6 @@ async function startTranscription(sessionId: string) {
       return NextResponse.json({ error: 'Session already active' }, { status: 400 });
     }
 
-    console.log(`[AssemblyAI] 🚀 Starting transcription session: ${sessionId}`);
-    
     // Create WebSocket connection to AssemblyAI v3 API
     const WebSocket = getWebSocket();
     const ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&format_turns=true`, {
@@ -85,7 +83,6 @@ async function startTranscription(sessionId: string) {
     };
 
     ws.onopen = () => {
-      console.log(`[AssemblyAI] ✅ Connected for session: ${sessionId}`);
       connection.isReady = true;
     };
 
@@ -101,24 +98,18 @@ async function startTranscription(sessionId: string) {
         const data = JSON.parse(messageData);
         const msgType = data.type;
 
-        console.log(`[AssemblyAI] 📨 Message for session ${sessionId}:`, {
-          type: msgType,
-          data: data
-        });
-
         if (msgType === 'Begin') {
           const sessionIdFromAPI = data.id;
           const expiresAt = data.expires_at;
           connection.expiresAt = expiresAt;
-          const expiresAtDate = new Date(expiresAt * 1000);
-          const timeUntilExpiry = Math.floor((expiresAt - Math.floor(Date.now() / 1000)));
-          console.log(`[AssemblyAI] 🎬 Session began: ID=${sessionIdFromAPI}, ExpiresAt=${expiresAtDate.toISOString()} (in ${timeUntilExpiry} seconds)`);
           connection.isReady = true;
         } else if (msgType === 'Turn') {
           const transcript = data.transcript || '';
           const formatted = data.turn_is_formatted;
           
           if (transcript) {
+            // Only log the transcript text
+            console.log(`[Transcript] ${formatted ? 'Final' : 'Partial'}: "${transcript}"`);
             connection.transcripts.push({
               type: formatted ? 'FinalTranscript' : 'PartialTranscript',
               text: transcript,
@@ -126,9 +117,6 @@ async function startTranscription(sessionId: string) {
             });
           }
         } else if (msgType === 'Termination') {
-          const audioDuration = data.audio_duration_seconds;
-          const sessionDuration = data.session_duration_seconds;
-          console.log(`[AssemblyAI] 🏁 Session terminated: Audio Duration=${audioDuration}s, Session Duration=${sessionDuration}s`);
           activeConnections.delete(sessionId);
         } else if (data.error) {
           console.error(`[AssemblyAI] ❌ Error for session ${sessionId}:`, data.error);
@@ -180,8 +168,10 @@ async function startTranscription(sessionId: string) {
         closeReason = 'Unknown';
       }
       
-      console.log(`[AssemblyAI] 🔌 Connection closed for session: ${sessionId}, code: ${closeCode}, reason: ${closeReason}`);
-      console.log(`[AssemblyAI] 🔌 Close details - code type: ${typeof code}, reason type: ${typeof reason}`);
+      // Only log if there's an error (non-normal closure)
+      if (closeCode !== 1000 && closeCode !== 1005) {
+        console.error(`[AssemblyAI] Connection closed with error: code ${closeCode}, reason: ${closeReason}`);
+      }
       
       // Don't immediately delete - let the client handle it gracefully
       // The session will be cleaned up on next request or timeout
@@ -251,7 +241,6 @@ async function sendAudio(sessionId: string, audioData: string) {
 
     // Check if WebSocket is still valid
     if (!connection.ws) {
-      console.log(`[AssemblyAI] ⚠️ WebSocket is null for session ${sessionId}`);
       activeConnections.delete(sessionId);
       return NextResponse.json(
         { 
@@ -266,7 +255,6 @@ async function sendAudio(sessionId: string, audioData: string) {
     if (connection.expiresAt) {
       const currentTime = Math.floor(Date.now() / 1000);
       if (currentTime >= connection.expiresAt) {
-        console.log(`[AssemblyAI] ⏰ Session expired for ${sessionId}. Current: ${currentTime}, Expires: ${connection.expiresAt}`);
         activeConnections.delete(sessionId);
         if (connection.ws) {
           connection.ws.close();
@@ -284,11 +272,8 @@ async function sendAudio(sessionId: string, audioData: string) {
     // WebSocket.OPEN = 1
     const readyState = connection.ws.readyState;
     if (!connection.isReady || readyState !== 1) {
-      console.log(`[AssemblyAI] ⚠️ WebSocket not ready for session ${sessionId}. isReady: ${connection.isReady}, readyState: ${readyState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`);
-      
       // If WebSocket is closing or closed, clean up
       if (readyState === 2 || readyState === 3) {
-        console.log(`[AssemblyAI] 🗑️ Cleaning up closed WebSocket for session ${sessionId}`);
         activeConnections.delete(sessionId);
         return NextResponse.json(
           { 
@@ -309,7 +294,6 @@ async function sendAudio(sessionId: string, audioData: string) {
     const audioBuffer = Buffer.from(audioData, 'base64');
     
     try {
-      console.log(`[AssemblyAI] 🎤 Sending audio for session ${sessionId}: ${audioBuffer.length} bytes`);
       connection.ws.send(audioBuffer);
       connection.lastActivity = Date.now();
     } catch (sendError) {
@@ -359,8 +343,6 @@ async function stopTranscription(sessionId: string) {
       );
     }
 
-    console.log(`[AssemblyAI] 🛑 Stopping transcription for session: ${sessionId}`);
-    
     // Get any remaining transcripts
     const finalTranscripts = [...connection.transcripts];
     
@@ -368,7 +350,6 @@ async function stopTranscription(sessionId: string) {
     if (connection.ws && connection.ws.readyState === 1) { // WebSocket.OPEN = 1
       try {
         const terminateMessage = { type: "Terminate" };
-        console.log(`[AssemblyAI] 📤 Sending termination message: ${JSON.stringify(terminateMessage)}`);
         connection.ws.send(JSON.stringify(terminateMessage));
         
         // Give a brief moment for the message to be sent before closing

@@ -26,6 +26,11 @@ export default function VoicePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const transcriptIdCounter = useRef<number>(0);
+  const wakeWordDetectedRef = useRef<boolean>(false);
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   // Auto-scroll to bottom when new transcripts are added
   useEffect(() => {
@@ -51,6 +56,12 @@ export default function VoicePage() {
     };
   }, []);
 
+  // Helper function to generate unique transcript IDs
+  const generateTranscriptId = () => {
+    transcriptIdCounter.current += 1;
+    return `transcript_${Date.now()}_${transcriptIdCounter.current}`;
+  };
+
   // Helper function to log to server terminal
   const logToServer = async (level: string, message: string, data?: any) => {
     try {
@@ -63,14 +74,110 @@ export default function VoicePage() {
     }
   };
 
+  const preprocessTranscript = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    try {
+      const response = await fetch('/api/transcript-preprocess', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: trimmed }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Transcript preprocessing failed');
+      }
+
+      const data = await response.json();
+      const cleaned = typeof data.cleanedTranscript === 'string' ? data.cleanedTranscript.trim() : '';
+      return cleaned || trimmed;
+
+    } catch (error) {
+      console.error('[Transcript] Error cleaning transcript with Gemini:', error);
+      logToServer('ERROR', '[Transcript] Error cleaning transcript with Gemini', error);
+      return trimmed;
+    }
+  };
+
   const addSystemMessage = (text: string) => {
     const systemTranscript: Transcript = {
-      id: Date.now().toString(),
+      id: generateTranscriptId(),
       type: 'system',
       text,
       timestamp: new Date().toISOString(),
     };
     setTranscripts((prev) => [...prev, systemTranscript]);
+  };
+
+  // Note: Microphone muting is handled by checking isPlayingAudio state
+  // in the processor.onaudioprocess callback, so no need to disconnect/reconnect
+
+  const synthesizeAndPlaySpeech = async (text: string) => {
+    try {
+      setIsPlayingAudio(true); // This automatically mutes microphone via processor check
+      
+      console.log('[TTS] Synthesizing speech for:', text);
+      logToServer('INFO', '[TTS] Synthesizing speech', { text });
+
+      // Call the text-to-speech API
+      const response = await fetch('/api/synthesize-speech', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to synthesize speech');
+      }
+
+      // Get audio blob from response
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Create and play audio
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      // Return to listening state after audio finishes
+      audio.onended = () => {
+        console.log('[TTS] Audio playback completed');
+        logToServer('INFO', '[TTS] Audio playback completed');
+        setIsPlayingAudio(false); // This automatically unmutes microphone
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+
+        // Resume listening if we were listening before
+        if (isListening) {
+          console.log('[TTS] Returning to listening state');
+          addSystemMessage('Listening for "Ollie"...');
+        }
+      };
+
+      audio.onerror = (error) => {
+        console.error('[TTS] Audio playback error:', error);
+        logToServer('ERROR', '[TTS] Audio playback error', error);
+        setIsPlayingAudio(false); // This automatically unmutes microphone
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+      };
+
+      await audio.play();
+      console.log('[TTS] Audio playback started');
+      logToServer('INFO', '[TTS] Audio playback started');
+
+    } catch (error) {
+      console.error('[TTS] Error synthesizing speech:', error);
+      logToServer('ERROR', '[TTS] Error synthesizing speech', error);
+      setIsPlayingAudio(false); // This automatically unmutes microphone
+      setError(`Failed to synthesize speech: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   };
 
   const processQuery = async (query: string) => {
@@ -80,31 +187,35 @@ export default function VoicePage() {
     setError(null);
 
     try {
-      const response = await fetch('/api/query', {
+      // Use transcript-preprocess which handles Gemini matching + SnowLeopard query
+      const response = await fetch('/api/transcript-preprocess', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query: query.trim() }),
+        body: JSON.stringify({ transcript: query.trim() }),
       });
 
       const data = await response.json();
 
       if (data.success && data.answer) {
-        // Always log AI response from Gemini
+        // Log AI response from SnowLeopard
         const aiTranscript: Transcript = {
-          id: (Date.now() + 1).toString(),
+          id: generateTranscriptId(),
           type: 'ai',
-          text: data.answer, // Gemini's generated response
+          text: data.answer,
           timestamp: data.timestamp || new Date().toISOString(),
         };
         setTranscripts((prev) => [...prev, aiTranscript]);
+
+        // Synthesize and play the AI response
+        await synthesizeAndPlaySpeech(data.answer);
       } else {
-        const errorMessage = data.answer || 'Failed to get response';
+        const errorMessage = data.answer || data.error || 'Failed to get response';
         setError(errorMessage);
         // Also log error as AI message for visibility
         const errorTranscript: Transcript = {
-          id: (Date.now() + 1).toString(),
+          id: generateTranscriptId(),
           type: 'ai',
           text: `Error: ${errorMessage}`,
           timestamp: new Date().toISOString(),
@@ -112,12 +223,12 @@ export default function VoicePage() {
         setTranscripts((prev) => [...prev, errorTranscript]);
       }
     } catch (err) {
-      console.error('Error calling query API:', err);
+      console.error('Error calling transcript-preprocess API:', err);
       const errorMessage = 'Failed to connect to the API. Please try again.';
       setError(errorMessage);
       // Log error as AI message
       const errorTranscript: Transcript = {
-        id: (Date.now() + 1).toString(),
+        id: generateTranscriptId(),
         type: 'ai',
         text: `Error: ${errorMessage}`,
         timestamp: new Date().toISOString(),
@@ -134,18 +245,18 @@ export default function VoicePage() {
     if (!inputText.trim()) return;
 
     const userQuery = inputText.trim();
-    
+
     // Add user transcript
     const userTranscript: Transcript = {
-      id: Date.now().toString(),
+      id: generateTranscriptId(),
       type: 'user',
       text: userQuery,
       timestamp: new Date().toISOString(),
     };
-    
+
     setTranscripts((prev) => [...prev, userTranscript]);
     setInputText('');
-    
+
     await processQuery(userQuery);
   };
 
@@ -169,8 +280,6 @@ export default function VoicePage() {
       }
 
       const startData = await startResponse.json();
-      console.log('[Transcription] ✅ Session started:', sessionId);
-      logToServer('INFO', '[Transcription] Session started: ' + sessionId);
 
       // Request microphone permission
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -241,14 +350,15 @@ export default function VoicePage() {
                 if (data.transcripts && data.transcripts.length > 0) {
                   data.transcripts.forEach((transcript: any) => {
                     if (transcript.type === 'PartialTranscript' || transcript.type === 'FinalTranscript') {
-                      console.log(`[Transcription] ${transcript.type}: "${transcript.text}"`);
-                      logToServer('INFO', `[Transcription] ${transcript.type}: "${transcript.text}"`, transcript);
+                      // Only log the transcript text
+                      console.log(`[Transcript] ${transcript.type === 'FinalTranscript' ? 'Final' : 'Partial'}: "${transcript.text}"`);
                       this.onTranscript?.({
                         message_type: transcript.type,
                         text: transcript.text,
                         confidence: transcript.confidence
                       });
                     } else if (transcript.type === 'error') {
+                      console.error(`[Transcription] Error: ${transcript.message}`);
                       this.onError?.(new Error(transcript.message));
                     }
                   });
@@ -296,55 +406,61 @@ export default function VoicePage() {
       transcriberRef.current = transcriber;
 
       // Wake word detection
-      const wakeWord = 'hey johnny';
+      const wakeWord = 'ollie';
       let wakeWordBuffer = '';
 
       transcriber.on('transcript', (transcript) => {
         if (transcript.text) {
-          const logMsg = `[Transcript] Raw: "${transcript.text}" (type: ${transcript.message_type || 'unknown'})`;
-          console.log(logMsg);
-          logToServer('INFO', logMsg, transcript);
-          
           const text = transcript.text.toLowerCase();
-          wakeWordBuffer += ' ' + text;
           
-          // Keep buffer to last 50 characters for wake word detection
-          if (wakeWordBuffer.length > 50) {
-            wakeWordBuffer = wakeWordBuffer.slice(-50);
-          }
-
-          // Check for wake word
-          if (!wakeWordDetected && wakeWordBuffer.includes(wakeWord)) {
-            console.log('[Wake Word] 🎯 "Hey Johnny" detected!');
-            logToServer('INFO', '[Wake Word] "Hey Johnny" detected!');
+          // Check for wake word only if not already detected
+          if (!wakeWordDetectedRef.current && text.includes(wakeWord)) {
+            console.log('[Wake Word] "Ollie" detected!');
+            wakeWordDetectedRef.current = true; // Set ref immediately to prevent duplicate detections
             setWakeWordDetected(true);
             setIsRecording(true);
             setCurrentTranscript('');
             addSystemMessage('Wake word detected! Listening...');
-            wakeWordBuffer = ''; // Reset buffer after detection
             return; // Don't process this transcript as it contains the wake word
           }
 
+          // If we haven't detected wake word yet, keep buffering for detection
+          if (!wakeWordDetectedRef.current) {
+            wakeWordBuffer += ' ' + text;
+            
+            // Keep buffer to last 50 characters for wake word detection
+            if (wakeWordBuffer.length > 50) {
+              wakeWordBuffer = wakeWordBuffer.slice(-50);
+            }
+            
+            // Check buffer for wake word
+            if (wakeWordBuffer.includes(wakeWord)) {
+              console.log('[Wake Word] "Ollie" detected!');
+              wakeWordDetectedRef.current = true; // Set ref immediately
+              setWakeWordDetected(true);
+              setIsRecording(true);
+              setCurrentTranscript('');
+              addSystemMessage('Wake word detected! Listening...');
+              wakeWordBuffer = ''; // Reset buffer after detection
+              return; // Don't process this transcript as it contains the wake word
+            }
+            return; // Still listening for wake word
+          }
+
           // If recording, update current transcript (exclude wake word)
-          if (isRecording && wakeWordDetected) {
+          if (wakeWordDetectedRef.current) {
             let transcriptText = transcript.text;
             
             // Remove wake word from transcript if it appears
             const lowerText = transcriptText.toLowerCase();
             if (lowerText.includes(wakeWord)) {
-              console.log('[Transcript] 🧹 Removing wake word from transcript');
-              logToServer('INFO', '[Transcript] Removing wake word from transcript');
               transcriptText = transcriptText.replace(new RegExp(wakeWord, 'gi'), '').trim();
             }
             
             // Only add non-empty text
             if (transcriptText.trim()) {
-              console.log(`[Transcript] ✍️ Adding to current transcript: "${transcriptText}"`);
-              logToServer('INFO', `[Transcript] Adding: "${transcriptText}"`);
               setCurrentTranscript((prev) => {
                 const newText = prev ? prev + ' ' + transcriptText : transcriptText;
-                console.log(`[Transcript] 📋 Current transcript: "${newText}"`);
-                logToServer('INFO', `[Transcript] Current full transcript: "${newText}"`);
                 
                 // Reset silence timer
                 if (silenceTimerRef.current) {
@@ -352,8 +468,6 @@ export default function VoicePage() {
                 }
 
                 silenceTimerRef.current = setTimeout(() => {
-                  console.log('[Transcript] ⏱️ Silence detected, finalizing transcript');
-                  logToServer('INFO', '[Transcript] Silence detected, finalizing');
                   if (newText.trim()) {
                     finalizeTranscript(newText.trim());
                   }
@@ -376,19 +490,15 @@ export default function VoicePage() {
 
       // Start polling for transcripts
       transcriber.startPolling();
-      console.log('[Transcription] ✅ Ready for audio');
 
       const audioContext = new AudioContext();
-      console.log(`[Audio] 🎚️ AudioContext created with sample rate: ${audioContext.sampleRate} Hz`);
-      
+      audioContextRef.current = audioContext;
       const source = audioContext.createMediaStreamSource(stream);
-      console.log('[Audio] 🎙️ MediaStream source created');
+      audioSourceRef.current = source;
       
       const targetSampleRate = 16000;
       const sourceSampleRate = audioContext.sampleRate;
       const resampleRatio = sourceSampleRate / targetSampleRate;
-      
-      console.log(`[Audio] 🔄 Resampling from ${sourceSampleRate} Hz to ${targetSampleRate} Hz (ratio: ${resampleRatio.toFixed(3)})`);
       
       // Audio buffering to meet AssemblyAI requirements: 50-1000ms chunks
       // At 16kHz: 50ms = 800 samples, 1000ms = 16000 samples
@@ -403,21 +513,18 @@ export default function VoicePage() {
           const chunkToSend = audioBuffer.slice(0, samplesToSend);
           audioBuffer = audioBuffer.slice(samplesToSend);
           
-          const durationMs = (chunkToSend.length / targetSampleRate) * 1000;
-          if (audioChunkCount % 20 === 0) {
-            console.log(`[Audio] 📤 Sending buffered chunk: ${chunkToSend.length} samples (${durationMs.toFixed(1)}ms)`);
-          }
           transcriber.sendAudio(chunkToSend.buffer);
           audioChunkCount++;
         }
       };
       
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      audioProcessorRef.current = processor;
 
       processor.onaudioprocess = (e) => {
-        // Only process audio if transcriber is ready
-        if (!transcriber.isReady) {
-          return; // Skip audio processing until ready
+        // Only process audio if transcriber is ready and not playing audio
+        if (!transcriber.isReady || isPlayingAudio) {
+          return; // Skip audio processing until ready or when audio is playing
         }
 
         const audioData = e.inputBuffer.getChannelData(0);
@@ -459,10 +566,9 @@ export default function VoicePage() {
 
       source.connect(processor);
       processor.connect(audioContext.destination);
-      console.log('[Audio] 🎵 Audio processing pipeline connected and ready');
 
       setIsListening(true);
-      addSystemMessage('Listening for "Hey Johnny"...');
+      addSystemMessage('Listening for "Ollie"...');
       console.log('[Voice] 🎤 Voice recognition started, listening for wake word...');
 
     } catch (err: any) {
@@ -479,33 +585,42 @@ export default function VoicePage() {
   };
 
   const finalizeTranscript = (text?: string) => {
-    const finalText = (text || currentTranscript.trim()).replace(/\s+/g, ' ').trim();
-    if (finalText) {
-      // Remove any remaining wake word mentions
-      const cleanedText = finalText.replace(/hey\s+johnny/gi, '').trim();
-      
-      if (cleanedText) {
-        // Always log user transcript
-        const userTranscript: Transcript = {
-          id: Date.now().toString(),
-          type: 'user',
-          text: cleanedText,
-          timestamp: new Date().toISOString(),
-        };
-        setTranscripts((prev) => [...prev, userTranscript]);
-        setCurrentTranscript('');
-        setIsRecording(false);
-        setWakeWordDetected(false);
-        
-        // Process the query
-        processQuery(cleanedText);
-      } else {
-        // If only wake word was detected, just reset
-        setCurrentTranscript('');
-        setIsRecording(false);
-        setWakeWordDetected(false);
+    const runFinalization = async () => {
+      const finalText = (text || currentTranscript.trim()).replace(/\s+/g, ' ').trim();
+      if (!finalText) {
+        return;
       }
-    }
+
+      // Remove any remaining wake word mentions
+      const cleanedText = finalText.replace(/ollie/gi, '').trim();
+
+      if (!cleanedText) {
+        setCurrentTranscript('');
+        setIsRecording(false);
+        setWakeWordDetected(false);
+        wakeWordDetectedRef.current = false; // Reset ref
+        return;
+      }
+
+      setCurrentTranscript('');
+      setIsRecording(false);
+      setWakeWordDetected(false);
+      wakeWordDetectedRef.current = false; // Reset ref
+
+      // Log the cleaned transcript (before preprocessing)
+      const userTranscript: Transcript = {
+        id: generateTranscriptId(),
+        type: 'user',
+        text: cleanedText,
+        timestamp: new Date().toISOString(),
+      };
+      setTranscripts((prev) => [...prev, userTranscript]);
+
+      // processQuery now uses transcript-preprocess which handles Gemini matching + SnowLeopard
+      await processQuery(cleanedText);
+    };
+
+    void runFinalization();
   };
 
   const stopListening = () => {
@@ -521,9 +636,31 @@ export default function VoicePage() {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+    // Clean up audio processor and source
+    if (audioProcessorRef.current) {
+      try {
+        audioProcessorRef.current.disconnect();
+      } catch (error) {
+        // Ignore disconnect errors
+      }
+      audioProcessorRef.current = null;
+    }
+    if (audioSourceRef.current) {
+      try {
+        audioSourceRef.current.disconnect();
+      } catch (error) {
+        // Ignore disconnect errors
+      }
+      audioSourceRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
     setIsListening(false);
     setIsRecording(false);
     setWakeWordDetected(false);
+    wakeWordDetectedRef.current = false; // Reset ref
     setCurrentTranscript('');
   };
 
@@ -558,13 +695,18 @@ export default function VoicePage() {
       <main className="max-w-4xl mx-auto px-6 py-8">
         {/* Status Indicators */}
         <div className="mb-6 flex gap-3 items-center justify-center">
-          {isListening && (
+          {isPlayingAudio && (
+            <div className="px-4 py-2 rounded-full text-sm font-medium bg-purple-100 text-purple-800 border border-purple-300">
+              🔊 Playing response...
+            </div>
+          )}
+          {isListening && !isPlayingAudio && (
             <div className={`px-4 py-2 rounded-full text-sm font-medium ${
-              wakeWordDetected 
-                ? 'bg-green-100 text-green-800 border border-green-300' 
+              wakeWordDetected
+                ? 'bg-green-100 text-green-800 border border-green-300'
                 : 'bg-blue-100 text-blue-800 border border-blue-300'
             }`}>
-              {wakeWordDetected ? '🎤 Recording...' : '👂 Listening for "Hey Johnny"...'}
+              {wakeWordDetected ? '🎤 Recording...' : '👂 Listening for "Ollie"...'}
             </div>
           )}
         </div>
@@ -576,7 +718,7 @@ export default function VoicePage() {
               <div className="text-center">
                 <div className="text-4xl mb-4">🎤</div>
                 <p className="text-lg">Click "Start Listening" to begin</p>
-                <p className="text-sm mt-2">Say "Hey Johnny" followed by your question</p>
+                <p className="text-sm mt-2">Say "Ollie" followed by your question</p>
               </div>
             </div>
           ) : (
@@ -687,8 +829,7 @@ export default function VoicePage() {
         {/* Info Box */}
         <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
           <p className="text-sm text-blue-800">
-            <strong>How to use:</strong> Click "Start Listening", then say "Hey Johnny" followed by your question. 
-            The system will automatically detect when you finish speaking and process your query.
+            <strong>How to use:</strong>
           </p>
         </div>
       </main>
