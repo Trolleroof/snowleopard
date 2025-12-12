@@ -44,12 +44,24 @@ export async function POST(request: NextRequest) {
 
     console.log('SnowLeopard response:', response);
 
+    // Check if response is an error
+    if ('error' in response) {
+      return NextResponse.json(
+        {
+          error: 'Failed to retrieve stock information',
+          details: (response as any).error || 'Unknown error from SnowLeopard API'
+        },
+        { status: 500 }
+      );
+    }
+
     // Format the response data for display
     let formattedStockInfo = '';
+    const responseData = response as any;
 
-    if (response.data && typeof response.data === 'object') {
-      const data = response.data as any;
+    const data = responseData.data || responseData;
 
+    if (data && typeof data === 'object') {
       // Extract query summary if available
       if (data.querySummary) {
         formattedStockInfo += `${data.querySummary}\n\n`;
@@ -72,7 +84,7 @@ export async function POST(request: NextRequest) {
         formattedStockInfo += '\n(Some results may have been trimmed)';
       }
     } else {
-      formattedStockInfo = String(response.data || 'No stock information available');
+      formattedStockInfo = String(data || 'No stock information available');
     }
 
     return NextResponse.json({
@@ -80,7 +92,7 @@ export async function POST(request: NextRequest) {
       item: item,
       question: question,
       stockInfo: formattedStockInfo.trim(),
-      rawData: response.data,
+      rawData: data,
       timestamp: new Date().toISOString(),
     });
 
